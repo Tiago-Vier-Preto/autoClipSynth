@@ -12,3 +12,4 @@ class Processing:
         data = self.analysis.run()
         synth_data = self.synth.run(data)
         self.rendering.run(synth_data)
+
