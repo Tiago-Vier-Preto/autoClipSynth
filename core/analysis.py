@@ -1,7 +1,7 @@
 import cv2
 import numpy as np
 from scipy.signal import welch
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ProcessPoolExecutor
 
 class Analysis:
     def __init__(self, music_path, video_paths):
@@ -20,7 +20,7 @@ class Analysis:
 
 
 def parallel_map(func, data):
-    with ThreadPoolExecutor() as executor:
+    with ProcessPoolExecutor() as executor:
         results = list(executor.map(func, data))
     return results
 
