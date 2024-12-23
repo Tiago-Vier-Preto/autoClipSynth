@@ -29,3 +29,6 @@ desktop.ini
 
 # Data
 data/
+
+#Tests
+tests/

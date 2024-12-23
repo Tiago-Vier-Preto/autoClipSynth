@@ -1,6 +1,7 @@
 import customtkinter as ctk
 from tkinter import filedialog
 import os
+from core.processing import Processing
 
 class Window (ctk.CTk):
     def __init__(self):
@@ -32,12 +33,11 @@ class Window (ctk.CTk):
         self.clip_label = ctk.CTkLabel(self, text="")
         self.clip_label.pack(pady=10)
 
+        self.output_name = ctk.CTkEntry(self, placeholder_text="Output Name")
+        self.output_name.pack(pady=10)
 
-    def add_aluno(self):
-        pass
-
-    def load_alunos(self):
-        pass
+        self.generate_button = ctk.CTkButton(self, text="Generate Synth", command=self.generate)
+        self.generate_button.pack(pady=10)
 
     def run(self):
         self.mainloop()
@@ -66,4 +66,7 @@ class Window (ctk.CTk):
     def reset_video(self):
         self.video_paths = []
         self.clip_label.configure(text="")
+
+    def generate(self):
+        process = Processing(self.music_path, self.video_paths)
         

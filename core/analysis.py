@@ -1,7 +1,6 @@
 import cv2
 import numpy as np
 from scipy.signal import welch
-from concurrent.futures import ProcessPoolExecutor
 
 class Analysis:
     def __init__(self, music_path, video_paths):
@@ -9,20 +8,14 @@ class Analysis:
         self.music = load_music(music_path)
 
     def run(self):
-        optical_flows = parallel_map(compute_optical_flow, self.grayscale_videos)
-        saliency_maps = parallel_map(compute_saliency_maps, self.grayscale_videos)
-        temporal_differences = parallel_map(compute_temporal_difference_with_advection, optical_flows)
-        mcr_values = parallel_map(lambda args: compute_mcr(*args), zip(temporal_differences, saliency_maps))
-        flow_peak_values = parallel_map(lambda args: compute_flow_peak(*args), zip(optical_flows, saliency_maps))
-        dynamism_values = parallel_map(compute_dynamism, optical_flows)
-        peak_frequency_values = parallel_map(compute_peak_frequency, mcr_values)
-        return mcr_values, flow_peak_values, dynamism_values, peak_frequency_values
-
-
-def parallel_map(func, data):
-    with ProcessPoolExecutor() as executor:
-        results = list(executor.map(func, data))
-    return results
+        optical_flows = list(map(compute_optical_flow, self.grayscale_videos))
+        saliency_maps = list(map(compute_saliency_maps, self.grayscale_videos))
+        temporal_differences = list(map(compute_temporal_difference_with_advection, optical_flows))
+        mcr_values = list(map(lambda args: compute_mcr(*args), zip(temporal_differences, saliency_maps)))
+        flow_peak_values = list(map(lambda args: compute_flow_peak(*args), zip(optical_flows, saliency_maps)))
+        dynamism_values = list(map(compute_dynamism, optical_flows))
+        peak_frequency_values = list(map(compute_peak_frequency, mcr_values))
+        return [mcr_values, flow_peak_values, dynamism_values, peak_frequency_values]
 
 def load_videos(video_paths):
     color_frames_list = [] 
@@ -66,15 +59,6 @@ def compute_saliency_maps(frames):
         saliency_maps.append(cv2.normalize(saliency_map, None, 0, 1, cv2.NORM_MINMAX))
     return saliency_maps
 
-"""
-def compute_temporal_difference(flows):
-    temporal_differences = []
-    for i in range(1, len(flows)):
-        diff = flows[i] - flows[i-1]
-        temporal_differences.append(diff)
-    return temporal_differences
-"""
-
 def compute_temporal_difference_with_advection(flows):
     temporal_differences = []
     for i in range(1, len(flows)):
@@ -96,7 +80,7 @@ def compute_temporal_difference_with_advection(flows):
 def compute_mcr(temporal_differences, saliency_maps):
     mcr_values = []
     for i, diff in enumerate(temporal_differences):
-        saliency = saliency_maps[i+1]
+        saliency = saliency_maps[i]
         magnitude = np.linalg.norm(diff, axis=2)
         weighted_magnitude = saliency * magnitude
         mcr = np.sum(weighted_magnitude) / (weighted_magnitude.shape[0] * weighted_magnitude.shape[1])
