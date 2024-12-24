@@ -1,7 +1,7 @@
 import customtkinter as ctk
 from tkinter import filedialog
 import os
-from core.processing import Processing
+from core.processing import run_processing
 
 class Window (ctk.CTk):
     def __init__(self):
@@ -68,5 +68,5 @@ class Window (ctk.CTk):
         self.clip_label.configure(text="")
 
     def generate(self):
-        process = Processing(self.music_path, self.video_paths)
+        run_processing(self.music_path, self.video_paths)
         

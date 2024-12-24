@@ -1,6 +1,16 @@
 import cv2
 import numpy as np
 from scipy.signal import welch
+from mido import MidiFile
+from scipy.cluster.hierarchy import linkage, fcluster
+from scipy.spatial.distance import pdist
+from scipy.stats import mode
+from scipy.ndimage import gaussian_filter1d
+
+# Constants for segment distance calculation
+W0 = 10
+W1 = 1
+W2 = 1
 
 class Analysis:
     def __init__(self, music_path, video_paths):
@@ -15,7 +25,11 @@ class Analysis:
         flow_peak_values = list(map(lambda args: compute_flow_peak(*args), zip(optical_flows, saliency_maps)))
         dynamism_values = list(map(compute_dynamism, optical_flows))
         peak_frequency_values = list(map(compute_peak_frequency, mcr_values))
-        return [mcr_values, flow_peak_values, dynamism_values, peak_frequency_values]
+        granularity = 10  # Desired number of segments
+        segments = music_segmentation(self.music, granularity)
+        tempo = 120  # Set a default tempo or calculate from the music file
+        saliency_results = calculate_saliency(self.music)
+        return [mcr_values, flow_peak_values, dynamism_values, peak_frequency_values], [segments, saliency_results]
 
 def load_videos(video_paths):
     color_frames_list = [] 
@@ -133,6 +147,167 @@ def compute_peak_frequency(mcr_values, window_size=30, threshold=-10):
 
     return peak_frequencies
 
-#WILL BE IMPLEMENTED LATER IGNORE FOR NOW
+# Helper function to load and parse MIDI file
 def load_music(music_path):
-    return None
+    midi = MidiFile(music_path)
+    tracks = []
+
+    for track in midi.tracks:
+        notes = []
+        time = 0
+        for msg in track:
+            time += msg.time
+            if msg.type == 'note_on' and msg.velocity > 0:
+                notes.append((time, msg.note))
+        tracks.append(notes)
+
+    return tracks
+
+# Function to compute pace, median pitch, and pitch std for a segment
+def compute_segment_features(segment):
+    times, pitches = zip(*segment)
+    duration = times[-1] - times[0]
+    pace = len(set(times)) / duration if duration > 0 else 0
+    median_pitch = np.median(pitches)
+    std_pitch = np.std(pitches)
+    return pace, median_pitch, std_pitch
+
+# Function to calculate segment distance
+def segment_distance(m1, m2, mode_pace, sigma_pitch):
+    pace_m1, median_pitch_m1, std_pitch_m1 = m1
+    pace_m2, median_pitch_m2, std_pitch_m2 = m2
+
+    dist = (
+        W0 * abs(pace_m1 - pace_m2) / mode_pace +
+        W1 * abs(median_pitch_m1 - median_pitch_m2) / sigma_pitch +
+        W2 * abs(std_pitch_m1 - std_pitch_m2) / sigma_pitch
+    )
+    return dist
+
+# Music segmentation function
+def music_segmentation(tracks, granularity):
+    all_bars = []
+
+    # Split tracks into bars
+    for notes in tracks:
+        bars = []
+        current_bar = []
+        for i, note in enumerate(notes):
+            current_bar.append(note)
+            if (i + 1) % 4 == 0:  # Assume 4 beats per bar
+                bars.append(current_bar)
+                current_bar = []
+        if current_bar:
+            bars.append(current_bar)
+        all_bars.extend(bars)
+
+    # Compute features for each bar
+    segment_features = [compute_segment_features(bar) for bar in all_bars]
+    mode_pace = np.median([f[0] for f in segment_features])
+    sigma_pitch = np.std([f[1] for f in segment_features])
+
+    # Create condensed distance matrix manually
+    num_segments = len(segment_features)
+    condensed_distances = np.zeros((num_segments * (num_segments - 1)) // 2)
+    k = 0
+    for i in range(num_segments - 1):
+        for j in range(i + 1, num_segments):
+            condensed_distances[k] = segment_distance(segment_features[i], segment_features[j], mode_pace, sigma_pitch)
+            k += 1
+
+    # Perform hierarchical clustering
+    Z = linkage(condensed_distances, method='average')
+    clusters = fcluster(Z, t=granularity, criterion='maxclust')
+
+    # Group bars into segments based on clusters
+    segmented_music = []
+    for cluster_id in np.unique(clusters):
+        segment = [all_bars[i] for i in range(len(clusters)) if clusters[i] == cluster_id]
+        segmented_music.append(segment)
+
+    return segmented_music
+
+def calculate_saliency(tracks):
+    note_onsets = []  # List of tuples (time, pitch, velocity)
+    tempo = 500000  # Default tempo (500000 microseconds per beat)
+
+    for track in tracks:
+        for time, note in track:
+            note_onsets.append((time, note, 127))  # Assuming maximum velocity for simplicity
+
+    note_onsets = sorted(note_onsets)  # Ensure they are sorted by time
+
+    saliency_scores = {
+        "pitch_peak": np.zeros(len(note_onsets)),
+        "before_long_interval": np.zeros(len(note_onsets)),
+        "after_long_interval": np.zeros(len(note_onsets)),
+        "start_of_bar": np.zeros(len(note_onsets)),
+        "start_of_new_bar": np.zeros(len(note_onsets)),
+        "start_of_different_bar": np.zeros(len(note_onsets)),
+        "pitch_shift": np.zeros(len(note_onsets)),
+        "deviated_pitch": np.zeros(len(note_onsets)),
+    }
+
+    beats_per_bar = 4  # Assuming 4/4 time signature
+    bar_duration = beats_per_bar * (60 / (tempo / 1e6))  # Bar duration in seconds
+    one_beat = 60 / (tempo / 1e6)  # Duration of one beat
+
+    def relative_pitches(notes):
+        return [p - notes[0] for p in notes]
+
+    for i, (time, pitch, velocity) in enumerate(note_onsets):
+        if i > 0 and i < len(note_onsets) - 1:
+            prev_pitch = max(n[1] for n in note_onsets if n[0] == note_onsets[i - 1][0])
+            next_pitch = max(n[1] for n in note_onsets if n[0] == note_onsets[i + 1][0])
+
+            if pitch > 2 * prev_pitch and pitch > 2 * next_pitch:
+                saliency_scores["pitch_peak"][i] = 1
+
+        if i < len(note_onsets) - 1:
+            next_time = note_onsets[i + 1][0]
+            if (next_time - time) >= one_beat:
+                saliency_scores["before_long_interval"][i] = 1
+
+        if i > 0:
+            prev_time = note_onsets[i - 1][0]
+            if (time - prev_time) >= one_beat:
+                saliency_scores["after_long_interval"][i] = 1
+
+        if time % bar_duration == 0:
+            saliency_scores["start_of_bar"][i] = 1
+
+        prev_bar_notes = [n for n in note_onsets if (time - bar_duration) <= n[0] < time]
+        if len(prev_bar_notes) == 0:
+            saliency_scores["start_of_new_bar"][i] = 1
+
+        prev_bar = [n for n in note_onsets if n[0] // bar_duration == (time // bar_duration) - 1]
+        curr_bar = [n for n in note_onsets if n[0] // bar_duration == time // bar_duration]
+
+        if len(prev_bar) > 0 and len(curr_bar) > 0:
+            prev_relative = relative_pitches([n[1] for n in prev_bar])
+            curr_relative = relative_pitches([n[1] for n in curr_bar])
+            match_onsets = len(set(n[0] for n in prev_bar).intersection(n[0] for n in curr_bar)) / len(curr_bar) > 0.8
+            match_pitches = len(set(prev_relative).intersection(curr_relative)) / len(curr_relative) > 0.5
+
+            if not (match_onsets and match_pitches):
+                saliency_scores["start_of_different_bar"][i] = 1
+
+        if len(prev_bar) > 0 and len(curr_bar) > 0:
+            pitch_diff = [n2[1] - n1[1] for n1, n2 in zip(prev_bar, curr_bar) if n1[0] == n2[0]]
+            if len(pitch_diff) > 0 and len(set(pitch_diff)) <= 1:
+                saliency_scores["pitch_shift"][i] = mode(pitch_diff).mode[0]
+
+        if len(prev_bar) > 0 and len(curr_bar) > 0:
+            pitch_diff = [n2[1] - n1[1] for n1, n2 in zip(prev_bar, curr_bar) if n1[0] == n2[0]]
+            if len(pitch_diff) > 0 and np.abs(pitch_diff - np.mean(pitch_diff)).max() > 2 * np.std(pitch_diff):
+                saliency_scores["deviated_pitch"][i] = 1
+
+    combined_saliency = np.zeros(len(note_onsets))
+    for i, (time, pitch, velocity) in enumerate(note_onsets):
+        combined_saliency[i] = (1 + velocity / 127) * sum(saliency_scores[key][i] for key in saliency_scores)
+
+    time_diffs = np.diff([n[0] for n in note_onsets], prepend=0)
+    sigmas = np.minimum(0.1, 0.25 * time_diffs)  # Define sigma based on time differences
+    continuous_saliency = gaussian_filter1d(combined_saliency, sigma=1)
+
+    return saliency_scores, combined_saliency, continuous_saliency
