@@ -14,7 +14,7 @@ W2 = 1
 
 class Analysis:
     def __init__(self, music_path, video_paths):
-        self.videos, self.grayscale_videos, self.fps_list = load_videos(video_paths)
+        self.videos, self.grayscale_videos = load_videos(video_paths)
         self.music = load_music(music_path)
 
     def run(self):
@@ -28,12 +28,11 @@ class Analysis:
         granularity = 10  # Desired number of segments
         music_segments = music_segmentation(self.music, granularity)
         saliency_results = calculate_saliency(self.music)
-        return mcr_values, flow_peak_values, dynamism_values, peak_frequency_values, music_segments, saliency_results, self.videos, self.fps_list
+        return mcr_values, flow_peak_values, dynamism_values, peak_frequency_values, music_segments, saliency_results, self.videos
 
 def load_videos(video_paths):
     color_frames_list = [] 
     grayscale_frames_list = []
-    fps_list = []
 
     for video_path in video_paths:
         cap = cv2.VideoCapture(video_path)
@@ -41,9 +40,6 @@ def load_videos(video_paths):
             raise FileNotFoundError(f"Cannot open video file: {video_path}")
         color_frames = []
         grayscale_frames = []
-
-        fps = cap.get(cv2.CAP_PROP_FPS)  # Get the FPS of the video
-        fps_list.append(fps)
 
         while cap.isOpened():
             ret, frame = cap.read()
@@ -55,7 +51,7 @@ def load_videos(video_paths):
         color_frames_list.append(color_frames)
         grayscale_frames_list.append(grayscale_frames)
 
-    return color_frames_list, grayscale_frames_list, fps_list
+    return color_frames_list, grayscale_frames_list
 
 def compute_optical_flow(frames):
     flows = []
@@ -313,4 +309,4 @@ def calculate_saliency(tracks):
     sigmas = np.minimum(0.1, 0.25 * time_diffs)  # Define sigma based on time differences
     continuous_saliency = gaussian_filter1d(combined_saliency, sigma=1)
 
-    return continuous_saliency
+    return saliency_scores, combined_saliency, continuous_saliency
