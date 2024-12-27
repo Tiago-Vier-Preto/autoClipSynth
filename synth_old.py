@@ -232,7 +232,7 @@ def global_alignment(videos, music_segments, saliency_results, mcr_values, peak_
                     tolerance = 1e-5
                     max_iterations = 3
 
-                    end_frame = calculate_video_end_frame(music_segment, start_frame, scale_factor, fps_list[video_index], video_length)
+                    end_frame = calculate_video_end_frame(music_segment, start_frame, scale_factor, fps_list[video_index])
 
                     for _ in range(max_iterations):
                         # Define o theta atual
@@ -268,8 +268,8 @@ def global_alignment(videos, music_segments, saliency_results, mcr_values, peak_
                     )
 
                     # Store the best configuration for this (video_index, index_segment) pair
-                    if index_segment not in best_theta or final_cost < best_theta[(index_segment)][1]:
-                        best_theta[(index_segment)] = ((video_index, start_frame, end_frame, scale_factor, index_segment), final_cost)
+                    if (video_index, index_segment) not in best_theta or final_cost < best_theta[(video_index, index_segment)][1]:
+                        best_theta[(video_index, index_segment)] = ((video_index, start_frame, end_frame, scale_factor, index_segment), final_cost)
         start = end + 1
 
     # Extract only the theta values
@@ -277,7 +277,7 @@ def global_alignment(videos, music_segments, saliency_results, mcr_values, peak_
     return optimal_theta, best_cost
 
 
-def calculate_video_end_frame(music_segment, video_start_frame, scaling_factor, video_fps, video_length):
+def calculate_video_end_frame(music_segment, video_start_frame, scaling_factor, video_fps):
     """
     Calculate the end frame for a video segment based on the music segment duration.
 
@@ -301,7 +301,82 @@ def calculate_video_end_frame(music_segment, video_start_frame, scaling_factor, 
 
     # Calculate end frame for the segment
     end_frame = video_start_frame + segment_duration_frames
-    if end_frame > video_length:
-        end_frame = video_length
+
     return end_frame
             
+
+def temporal_snapping(global_alignment_result, videos, music_segments, flow_peak_values, music_saliency):
+        video_index, start_frame, end_frame, scale_factor = global_alignment_result
+        
+        video = videos[video_index][start_frame:end_frame]
+        music_segment = music_segments[video_index]
+
+        # Identify keyframes and salient notes
+        keyframes = identify_keyframes(video, flow_peak_values)
+        salient_notes = identify_salient_notes(music_segment, music_saliency[video_index])
+
+        # Compute matching via dynamic programming
+        matched_frames, cost = temporal_matching(keyframes, salient_notes)
+
+        # Apply snapping and scaling
+        snapped_video = apply_snapping(video, keyframes, salient_notes, matched_frames)
+        return snapped_video
+
+def identify_keyframes(video, flow_peak_values):
+    keyframes = [0, len(video) - 1]  # Start and end frames
+
+    # Identify local peaks above the 90th percentile
+    motion_change_rate = np.diff(flow_peak_values)
+    threshold = np.percentile(motion_change_rate, 90)
+
+    for i in range(1, len(motion_change_rate) - 1):
+        if motion_change_rate[i] > threshold and motion_change_rate[i] > motion_change_rate[i - 1] and motion_change_rate[i] > motion_change_rate[i + 1]:
+            keyframes.append(i)
+
+    keyframes.sort()
+    return [(t, flow_peak_values[t]) for t in keyframes if t < len(flow_peak_values)]
+
+def identify_salient_notes(music_segment, saliency):
+    if not isinstance(saliency, (list, np.ndarray)):
+        saliency = np.array([saliency])  # Convert to array if it's a scalar
+
+    if len(saliency) < 2:
+        raise ValueError("Saliency must have at least two elements.")
+
+    salient_notes = [
+        (0, saliency[0]),  # First note
+        (len(music_segment) - 1, saliency[-1])  # Last note
+    ]
+
+    for i, (onset, score) in enumerate(zip(music_segment, saliency)):
+        if score >= 0.5:
+            salient_notes.append((i, score))
+
+    salient_notes.sort()
+    return salient_notes
+
+def temporal_matching(keyframes, salient_notes):
+    n, m = len(keyframes), len(salient_notes)
+    cost_matrix = np.zeros((n, m))
+
+    for i in range(n):
+        for j in range(m):
+            t1, w1 = keyframes[i]
+            t2, w2 = salient_notes[j]
+            cost_matrix[i, j] = (t1 - t2) ** 2 - min(w1 * w2, 0.25)
+
+    row_ind, col_ind = linear_sum_assignment(cost_matrix)
+
+    matched_frames = [(keyframes[i], salient_notes[j]) for i, j in zip(row_ind, col_ind)]
+    total_cost = cost_matrix[row_ind, col_ind].sum()
+    return matched_frames, total_cost
+
+def apply_snapping(video, keyframes, salient_notes, matched_frames):
+    snapped_video = []
+    
+    for ((t1, _), (t2, _)) in matched_frames:
+        segment_length = abs(t2 - t1)
+        snapped_video.extend(video[t1:t1 + segment_length])
+
+    return snapped_video
+

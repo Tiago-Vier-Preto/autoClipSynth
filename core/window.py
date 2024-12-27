@@ -68,5 +68,5 @@ class Window (ctk.CTk):
         self.clip_label.configure(text="")
 
     def generate(self):
-        run_processing(self.music_path, self.video_paths)
+        run_processing(self.music_path, self.video_paths, self.output_name.get())
         
